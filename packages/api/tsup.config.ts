@@ -3,7 +3,9 @@ import { defineConfig } from "tsup";
 export default defineConfig({
   entry: {
     "events-handler": "src/events-handler.ts",
-    "aggregation-worker": "src/aggregation-worker.ts"
+    "events-worker": "src/events-worker.ts",
+    "aggregation-worker": "src/aggregation-worker.ts",
+    "slack-notifier": "src/slack-notifier.ts"
   },
   format: ["cjs"],
   bundle: true,

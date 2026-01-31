@@ -1,6 +1,6 @@
 # stamp-track
 
-Slack reaction-based time tracking (start/end reactions) with AWS Lambda, API Gateway, SQS, and RDS (PostgreSQL).
+Slack reaction-based time tracking (:task_start: / :task_end:) with AWS Lambda, API Gateway, SQS, and RDS (PostgreSQL).
 
 ## Requirements
 - Node.js 20+
@@ -40,6 +40,8 @@ Slack reaction-based time tracking (start/end reactions) with AWS Lambda, API Ga
   - `chat:write`
   - `im:write`
   - `users:read`
+  - `channels:history` (public channel threads)
+  - `groups:history` (private channel threads)
   - `users:read.email` (if needed)
 
 ## Build
@@ -65,8 +67,10 @@ npm run build
    ```
 
 ## Lambda handlers
-- `packages/api/src/events-handler.ts` handles Slack Events API
-- `packages/api/src/aggregation-worker.ts` handles SQS aggregation jobs
+- `packages/api/src/events-handler.ts`: Slack Events API receiver (VPC外)
+- `packages/api/src/events-worker.ts`: DB 처리 + Slack reply enqueue (VPC内)
+- `packages/api/src/aggregation-worker.ts`: 集計 (VPC内)
+- `packages/api/src/slack-notifier.ts`: Slack返信/DM送信 (VPC外)
 
 ## Secrets
 - Lambda will load secrets from Secrets Manager if `APP_SECRETS_ARN` is set.
@@ -77,4 +81,4 @@ npm run build
 
 ## Notes
 - User status emoji `:kyukei_chu:` or `:taikin_zumi:` closes the work session.
-- DM includes only a permalink to the thread when `:start:` is used.
+- DM includes only a permalink to the thread when `:task_start:` is used.

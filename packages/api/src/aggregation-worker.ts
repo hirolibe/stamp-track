@@ -1,7 +1,11 @@
 import { SQSEvent, SQSRecord } from "aws-lambda";
+import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { getPrisma } from "./db";
-import { openDm, postDm } from "./slack";
 import { ensureSecrets } from "./secrets";
+import { SlackReplyMessage } from "./messages";
+
+const replyQueueUrl = process.env.SLACK_REPLY_QUEUE_URL || "";
+const sqsClient = new SQSClient({});
 
 const formatDuration = (seconds: number) => {
   const rounded = Math.max(0, Math.round(seconds));
@@ -22,64 +26,14 @@ const groupDurations = (rows: { channel_id: string; seconds: number }[]) => {
   return map;
 };
 
-const postAggregation = async (
-  slackUserId: string,
-  periodStart: Date,
-  periodEnd: Date,
-  durationsByChannel: Map<string, number>,
-  otherSeconds: number,
-  grossSeconds: number,
-  trigger: string
-) => {
-  const channelId = await openDm(slackUserId);
-  if (!channelId) return;
-
-  const periodText = `${periodStart.toISOString()} ~ ${periodEnd.toISOString()}`;
-  const entries = Array.from(durationsByChannel.entries());
-  entries.sort((a, b) => b[1] - a[1]);
-
-  const blocks: any[] = [
-    {
-      type: "header",
-      text: {
-        type: "plain_text",
-        text: trigger === "break" ? "休憩集計" : "退勤集計"
-      }
-    },
-    {
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `期間: ${periodText}`
-      }
-    }
-  ];
-
-  if (entries.length === 0) {
-    blocks.push({
-      type: "section",
-      text: { type: "mrkdwn", text: "タスク記録はありません。" }
-    });
-  } else {
-    for (const [channel, seconds] of entries) {
-      blocks.push({
-        type: "section",
-        text: { type: "mrkdwn", text: `<#${channel}>: ${formatDuration(seconds)}` }
-      });
-    }
-  }
-
-  blocks.push({ type: "divider" });
-
-  blocks.push({
-    type: "section",
-    text: {
-      type: "mrkdwn",
-      text: `その他: ${formatDuration(otherSeconds)} / 合計: ${formatDuration(grossSeconds)}`
-    }
-  });
-
-  await postDm(channelId, blocks, "集計結果");
+const sendReply = async (message: SlackReplyMessage) => {
+  if (!replyQueueUrl) return;
+  await sqsClient.send(
+    new SendMessageCommand({
+      QueueUrl: replyQueueUrl,
+      MessageBody: JSON.stringify(message)
+    })
+  );
 };
 
 const computeTaskDurations = (
@@ -119,16 +73,49 @@ const handleRecord = async (record: SQSRecord) => {
   const grossSeconds = Math.max(0, (periodEnd.getTime() - periodStart.getTime()) / 1000);
   const taskSeconds = Array.from(durationsByChannel.values()).reduce((a, b) => a + b, 0);
   const otherSeconds = Math.max(0, grossSeconds - taskSeconds);
+  const channelMap = new Map<string, { seconds: number; tasks: typeof tasks }>();
+  for (const [channelId, seconds] of durationsByChannel.entries()) {
+    channelMap.set(channelId, { seconds, tasks: [] });
+  }
 
-  await postAggregation(
-    slackUserId,
-    periodStart,
-    periodEnd,
-    durationsByChannel,
-    otherSeconds,
-    grossSeconds,
-    trigger
-  );
+  tasks.forEach((task) => {
+    const end = task.ended_at ? task.ended_at : periodEnd;
+    const clipStart = task.started_at > periodStart ? task.started_at : periodStart;
+    const clipEnd = end < periodEnd ? end : periodEnd;
+    const seconds = Math.max(0, (clipEnd.getTime() - clipStart.getTime()) / 1000);
+    if (seconds <= 0) return;
+    const entry = channelMap.get(task.channel_id);
+    if (entry) {
+      entry.tasks.push(task);
+    }
+  });
+
+  const channels = Array.from(channelMap.entries())
+    .map(([channel_id, data]) => ({
+      channel_id,
+      seconds: data.seconds,
+      tasks: data.tasks
+        .sort((a, b) => a.started_at.getTime() - b.started_at.getTime())
+        .map((task) => ({
+          thread_ts: task.thread_ts,
+          started_at: task.started_at.toISOString(),
+          ended_at: task.ended_at ? task.ended_at.toISOString() : null
+        }))
+    }))
+    .sort((a, b) => b.seconds - a.seconds);
+
+  const message: SlackReplyMessage = {
+    kind: "aggregation_report",
+    slack_user_id: slackUserId,
+    period_start: periodStart.toISOString(),
+    period_end: periodEnd.toISOString(),
+    trigger,
+    gross_seconds: grossSeconds,
+    other_seconds: otherSeconds,
+    channels
+  };
+
+  await sendReply(message);
 };
 
 export const handler = async (event: SQSEvent) => {

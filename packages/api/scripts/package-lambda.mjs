@@ -50,4 +50,6 @@ const packageFunction = (name, entryFile) => {
 
 ensureDir(outDir);
 packageFunction("events", "events-handler.js");
+packageFunction("events-worker", "events-worker.js");
 packageFunction("worker", "aggregation-worker.js");
+packageFunction("slack-notifier", "slack-notifier.js");

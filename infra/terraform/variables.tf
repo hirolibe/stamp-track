@@ -63,8 +63,20 @@ variable "events_handler_path" {
   default     = "../../packages/api/dist/lambda/events"
 }
 
+variable "events_worker_path" {
+  type        = string
+  description = "Path to built events worker directory"
+  default     = "../../packages/api/dist/lambda/events-worker"
+}
+
 variable "worker_handler_path" {
   type        = string
   description = "Path to built worker handler JS file"
   default     = "../../packages/api/dist/lambda/worker"
+}
+
+variable "slack_notifier_path" {
+  type        = string
+  description = "Path to built slack notifier directory"
+  default     = "../../packages/api/dist/lambda/slack-notifier"
 }

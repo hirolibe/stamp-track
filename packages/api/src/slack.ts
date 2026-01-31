@@ -38,6 +38,8 @@ export const getPermalink = async (channel: string, messageTs: string) => {
   return res.permalink || "";
 };
 
+export const getSlackClient = () => getClient();
+
 export const openDm = async (slackUserId: string) => {
   const dm = await getClient().conversations.open({ users: slackUserId });
   return dm.channel?.id || "";

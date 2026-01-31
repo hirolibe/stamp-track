@@ -36,6 +36,24 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
+resource "aws_vpc_endpoint" "sqs" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.aws_region}.sqs"
+  vpc_endpoint_type = "Interface"
+  subnet_ids        = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+  security_group_ids = [aws_security_group.vpc_endpoint.id]
+  private_dns_enabled = true
+}
+
+resource "aws_vpc_endpoint" "secretsmanager" {
+  vpc_id            = aws_vpc.main.id
+  service_name      = "com.amazonaws.${var.aws_region}.secretsmanager"
+  vpc_endpoint_type = "Interface"
+  subnet_ids        = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+  security_group_ids = [aws_security_group.vpc_endpoint.id]
+  private_dns_enabled = true
+}
+
 resource "aws_subnet" "public_a" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = var.public_subnet_cidrs[0]
@@ -95,28 +113,9 @@ resource "aws_route_table_association" "public_b" {
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_eip" "nat" {
-  domain = "vpc"
-  tags = {
-    Name = "${local.name}-nat-eip"
-  }
-}
-
-resource "aws_nat_gateway" "main" {
-  allocation_id = aws_eip.nat.id
-  subnet_id     = aws_subnet.public_a.id
-  tags = {
-    Name = "${local.name}-nat"
-  }
-  depends_on = [aws_internet_gateway.main]
-}
 
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.main.id
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main.id
-  }
   tags = {
     Name = "${local.name}-private-rt"
   }
@@ -145,10 +144,17 @@ resource "aws_security_group" "lambda" {
   }
 }
 
-resource "aws_security_group" "ssm" {
-  name        = "${local.name}-ssm-sg"
-  description = "SSM instance security group"
+resource "aws_security_group" "vpc_endpoint" {
+  name        = "${local.name}-vpce-sg"
+  description = "VPC endpoint security group"
   vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    security_groups = [aws_security_group.lambda.id]
+  }
 
   egress {
     from_port   = 0
@@ -157,6 +163,7 @@ resource "aws_security_group" "ssm" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
+
 
 resource "aws_security_group" "db" {
   name        = "${local.name}-db-sg"
@@ -207,6 +214,16 @@ resource "aws_sqs_queue" "aggregation" {
   visibility_timeout_seconds = 60
 }
 
+resource "aws_sqs_queue" "events" {
+  name                      = "${local.name}-events-queue"
+  visibility_timeout_seconds = 60
+}
+
+resource "aws_sqs_queue" "slack_reply" {
+  name                      = "${local.name}-slack-reply-queue"
+  visibility_timeout_seconds = 60
+}
+
 resource "aws_iam_role" "lambda" {
   name = "${local.name}-lambda-role"
   assume_role_policy = jsonencode({
@@ -223,56 +240,6 @@ resource "aws_iam_role" "lambda" {
   })
 }
 
-resource "aws_iam_role" "ssm" {
-  name = "${local.name}-ssm-role"
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "ssm_core" {
-  role       = aws_iam_role.ssm.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-resource "aws_iam_instance_profile" "ssm" {
-  name = "${local.name}-ssm-profile"
-  role = aws_iam_role.ssm.name
-}
-
-data "aws_ami" "al2023" {
-  most_recent = true
-  owners      = ["amazon"]
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023.*-kernel-6.*-x86_64"]
-  }
-  filter {
-    name   = "architecture"
-    values = ["x86_64"]
-  }
-}
-
-resource "aws_instance" "ssm" {
-  ami           = data.aws_ami.al2023.id
-  instance_type = "t3.micro"
-  subnet_id     = aws_subnet.private_a.id
-  vpc_security_group_ids = [aws_security_group.ssm.id]
-  iam_instance_profile   = aws_iam_instance_profile.ssm.name
-
-  tags = {
-    Name = "${local.name}-migrate"
-  }
-}
 
 resource "aws_iam_role_policy_attachment" "lambda_basic" {
   role       = aws_iam_role.lambda.name
@@ -298,7 +265,11 @@ resource "aws_iam_role_policy" "lambda_extra" {
           "sqs:DeleteMessage",
           "sqs:GetQueueAttributes"
         ]
-        Resource = aws_sqs_queue.aggregation.arn
+        Resource = [
+          aws_sqs_queue.aggregation.arn,
+          aws_sqs_queue.events.arn,
+          aws_sqs_queue.slack_reply.arn
+        ]
       },
       {
         Effect = "Allow"
@@ -330,10 +301,22 @@ data "archive_file" "events" {
   output_path = "${path.module}/dist/events-handler.zip"
 }
 
+data "archive_file" "events_worker" {
+  type        = "zip"
+  source_dir  = var.events_worker_path
+  output_path = "${path.module}/dist/events-worker.zip"
+}
+
 data "archive_file" "worker" {
   type        = "zip"
   source_dir  = var.worker_handler_path
   output_path = "${path.module}/dist/aggregation-worker.zip"
+}
+
+data "archive_file" "slack_notifier" {
+  type        = "zip"
+  source_dir  = var.slack_notifier_path
+  output_path = "${path.module}/dist/slack-notifier.zip"
 }
 
 resource "aws_lambda_function" "events" {
@@ -345,6 +328,23 @@ resource "aws_lambda_function" "events" {
   source_code_hash = data.archive_file.events.output_base64sha256
   timeout       = 15
 
+  environment {
+    variables = {
+      APP_SECRETS_ARN          = aws_secretsmanager_secret.app.arn
+      EVENTS_QUEUE_URL         = aws_sqs_queue.events.id
+    }
+  }
+}
+
+resource "aws_lambda_function" "events_worker" {
+  function_name = "${local.name}-events-worker"
+  role          = aws_iam_role.lambda.arn
+  handler       = "events-worker.handler"
+  runtime       = "nodejs20.x"
+  filename      = data.archive_file.events_worker.output_path
+  source_code_hash = data.archive_file.events_worker.output_base64sha256
+  timeout       = 20
+
   vpc_config {
     subnet_ids         = [aws_subnet.private_a.id, aws_subnet.private_b.id]
     security_group_ids = [aws_security_group.lambda.id]
@@ -354,6 +354,7 @@ resource "aws_lambda_function" "events" {
     variables = {
       APP_SECRETS_ARN          = aws_secretsmanager_secret.app.arn
       AGGREGATION_QUEUE_URL    = aws_sqs_queue.aggregation.id
+      SLACK_REPLY_QUEUE_URL    = aws_sqs_queue.slack_reply.id
     }
   }
 }
@@ -375,6 +376,23 @@ resource "aws_lambda_function" "worker" {
   environment {
     variables = {
       APP_SECRETS_ARN = aws_secretsmanager_secret.app.arn
+      SLACK_REPLY_QUEUE_URL = aws_sqs_queue.slack_reply.id
+    }
+  }
+}
+
+resource "aws_lambda_function" "slack_notifier" {
+  function_name = "${local.name}-slack-notifier"
+  role          = aws_iam_role.lambda.arn
+  handler       = "slack-notifier.handler"
+  runtime       = "nodejs20.x"
+  filename      = data.archive_file.slack_notifier.output_path
+  source_code_hash = data.archive_file.slack_notifier.output_base64sha256
+  timeout       = 15
+
+  environment {
+    variables = {
+      APP_SECRETS_ARN = aws_secretsmanager_secret.app.arn
     }
   }
 }
@@ -382,6 +400,18 @@ resource "aws_lambda_function" "worker" {
 resource "aws_lambda_event_source_mapping" "worker_sqs" {
   event_source_arn = aws_sqs_queue.aggregation.arn
   function_name    = aws_lambda_function.worker.arn
+  batch_size       = 10
+}
+
+resource "aws_lambda_event_source_mapping" "events_worker_sqs" {
+  event_source_arn = aws_sqs_queue.events.arn
+  function_name    = aws_lambda_function.events_worker.arn
+  batch_size       = 10
+}
+
+resource "aws_lambda_event_source_mapping" "slack_reply_sqs" {
+  event_source_arn = aws_sqs_queue.slack_reply.arn
+  function_name    = aws_lambda_function.slack_notifier.arn
   batch_size       = 10
 }
 
