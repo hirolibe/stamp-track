@@ -1,0 +1,50 @@
+generator client {
+  provider = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String         @id @default(uuid())
+  slack_user_id String         @unique
+  slack_team_id String?
+  created_at    DateTime       @default(now())
+  updated_at    DateTime       @updatedAt
+  work_sessions WorkSession[]
+  task_sessions TaskSession[]
+}
+
+model WorkSession {
+  id           String   @id @default(uuid())
+  user_id      String
+  clock_in_at  DateTime
+  clock_out_at DateTime?
+  created_at   DateTime @default(now())
+  updated_at   DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id])
+}
+
+model TaskSession {
+  id         String   @id @default(uuid())
+  user_id    String
+  channel_id String
+  thread_ts  String
+  started_at DateTime
+  ended_at   DateTime?
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  user User @relation(fields: [user_id], references: [id])
+}
+
+model SlackEvent {
+  event_id     String   @id
+  event_type   String
+  received_at  DateTime @default(now())
+  payload_hash String?
+}

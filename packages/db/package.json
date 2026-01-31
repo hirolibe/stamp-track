@@ -1,0 +1,7 @@
+{
+  "name": "@stamp-track/db",
+  "private": true,
+  "prisma": {
+    "schema": "prisma/schema.prisma"
+  }
+}

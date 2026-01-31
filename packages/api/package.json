@@ -1,0 +1,22 @@
+{
+  "name": "@stamp-track/api",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "package": "tsup && node scripts/package-lambda.mjs",
+    "lint": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@aws-sdk/client-secrets-manager": "^3.572.0",
+    "@aws-sdk/client-sqs": "^3.572.0",
+    "@prisma/client": "^5.14.0",
+    "@slack/web-api": "^7.1.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.137",
+    "tsup": "^8.0.2",
+    "typescript": "^5.4.5"
+  }
+}

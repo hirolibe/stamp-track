@@ -1,0 +1,14 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: stamp-track-postgres
+    environment:
+      POSTGRES_USER: stamp
+      POSTGRES_PASSWORD: stamp
+      POSTGRES_DB: stamp_track
+    ports:
+      - "15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+volumes:
+  pgdata:
