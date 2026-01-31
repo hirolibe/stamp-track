@@ -77,7 +77,7 @@ const handleMessage = async (message: SlackReplyMessage) => {
 
     for (const channel of message.channels) {
       const lines: string[] = [];
-      lines.push(`*<#${channel.channel_id}>：${formatDuration(channel.seconds)}*`);
+      lines.push(`<#${channel.channel_id}>：${formatDuration(channel.seconds)}`);
       for (const task of channel.tasks) {
         const permalink = await getPermalink(channel.channel_id, task.thread_ts);
         const title = await fetchThreadTitle(channel.channel_id, task.thread_ts);
