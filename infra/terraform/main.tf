@@ -393,7 +393,8 @@ resource "aws_lambda_function" "slack_notifier" {
 
   environment {
     variables = {
-      APP_SECRETS_ARN = aws_secretsmanager_secret.app.arn
+      APP_SECRETS_ARN   = aws_secretsmanager_secret.app.arn
+      EVENTS_QUEUE_URL  = aws_sqs_queue.events.id
     }
   }
 }

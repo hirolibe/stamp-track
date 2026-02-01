@@ -14,7 +14,7 @@ Slack reaction-based time tracking (:task_start: / :task_end:) with AWS Lambda, 
    ```
 2. Set env vars:
    ```bash
-   export DATABASE_URL="postgresql://stamp:stamp@localhost:15432/stamp_track"
+   export DATABASE_URL="postgresql://stamp:stamp@localhost:5432/stamp_track"
    export SLACK_SIGNING_SECRET="..."
    export SLACK_BOT_TOKEN="xoxb-..."
    export AGGREGATION_QUEUE_URL="https://sqs..." # optional for local

@@ -10,6 +10,7 @@ export type SlackReplyMessage =
       slack_user_id: string;
       channel_id: string;
       thread_ts: string;
+      task_session_id: string;
     }
   | {
       kind: "dm_blocks";
@@ -34,6 +35,18 @@ export type SlackReplyMessage =
           ended_at: string | null;
         }[];
       }[];
+    }
+  | {
+      kind: "update_dm_info";
+      task_session_id: string;
+      dm_channel_id: string;
+      dm_message_ts: string;
+    }
+  | {
+      kind: "add_reaction";
+      channel_id: string;
+      message_ts: string;
+      emoji: string;
     };
 
 export type SlackEventEnvelope = {

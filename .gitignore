@@ -6,5 +6,7 @@ packages/api/.tsup
 terraform.tfstate
 terraform.tfstate.backup
 terraform.tfvars
+terraform.tfvars.sample
 infra/terraform/.terraform
 infra/terraform/dist
+.serena

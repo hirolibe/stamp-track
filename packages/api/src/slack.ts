@@ -23,11 +23,12 @@ export const postThreadReply = async (channel: string, threadTs: string, text: s
 export const sendDmLink = async (slackUserId: string, permalink: string) => {
   const dm = await getClient().conversations.open({ users: slackUserId });
   const channelId = dm.channel?.id;
-  if (!channelId) return;
-  await getClient().chat.postMessage({
+  if (!channelId) return null;
+  const res = await getClient().chat.postMessage({
     channel: channelId,
     text: permalink
   });
+  return { dm_channel_id: channelId, dm_message_ts: res.ts || null };
 };
 
 export const getPermalink = async (channel: string, messageTs: string) => {
@@ -50,5 +51,13 @@ export const postDm = async (channelId: string, blocks: any[], text: string) => 
     channel: channelId,
     blocks,
     text
+  });
+};
+
+export const addReaction = async (channel: string, timestamp: string, emoji: string) => {
+  await getClient().reactions.add({
+    channel,
+    timestamp,
+    name: emoji
   });
 };

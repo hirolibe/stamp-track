@@ -117,7 +117,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       });
     }
 
-    await prisma.taskSession.create({
+    const taskSession = await prisma.taskSession.create({
       data: {
         user_id: user.id,
         channel_id: channelId,
@@ -137,7 +137,8 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       kind: "dm_link",
       slack_user_id: slackUserId,
       channel_id: channelId,
-      thread_ts: threadTs
+      thread_ts: threadTs,
+      task_session_id: taskSession.id
     });
   }
 
@@ -152,6 +153,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
     });
 
     if (active) {
+      console.log("task_end: active=", JSON.stringify(active));
       await prisma.taskSession.update({
         where: { id: active.id },
         data: { ended_at: new Date() }
@@ -162,6 +164,17 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
         thread_ts: threadTs,
         text: `${actor} タスクが完了しました！🎉`
       });
+      if (active.dm_channel_id && active.dm_message_ts) {
+        console.log("task_end: sending add_reaction to queue");
+        await sendReply({
+          kind: "add_reaction",
+          channel_id: active.dm_channel_id,
+          message_ts: active.dm_message_ts,
+          emoji: "task_end"
+        });
+      } else {
+        console.log("task_end: no dm_channel_id or dm_message_ts", active.dm_channel_id, active.dm_message_ts);
+      }
     } else {
       await sendReply({
         kind: "thread_reply",
@@ -264,10 +277,33 @@ const handleEnvelope = async (envelope: SlackEventEnvelope) => {
   }
 };
 
+type UpdateDmInfoMessage = {
+  kind: "update_dm_info";
+  task_session_id: string;
+  dm_channel_id: string;
+  dm_message_ts: string;
+};
+
+const handleUpdateDmInfo = async (message: UpdateDmInfoMessage) => {
+  const prisma = getPrisma();
+  await prisma.taskSession.update({
+    where: { id: message.task_session_id },
+    data: {
+      dm_channel_id: message.dm_channel_id,
+      dm_message_ts: message.dm_message_ts
+    }
+  });
+  console.log("update_dm_info: DB updated for task_session_id=", message.task_session_id);
+};
+
 export const handler = async (event: SQSEvent) => {
   await ensureSecrets();
   for (const record of event.Records) {
-    const envelope = JSON.parse(record.body) as SlackEventEnvelope;
-    await handleEnvelope(envelope);
+    const body = JSON.parse(record.body);
+    if (body.kind === "update_dm_info") {
+      await handleUpdateDmInfo(body as UpdateDmInfoMessage);
+    } else {
+      await handleEnvelope(body as SlackEventEnvelope);
+    }
   }
 };
