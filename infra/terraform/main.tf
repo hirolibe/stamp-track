@@ -355,6 +355,7 @@ resource "aws_lambda_function" "events_worker" {
       APP_SECRETS_ARN          = aws_secretsmanager_secret.app.arn
       AGGREGATION_QUEUE_URL    = aws_sqs_queue.aggregation.id
       SLACK_REPLY_QUEUE_URL    = aws_sqs_queue.slack_reply.id
+      ALLOWED_SLACK_USER_IDS   = var.allowed_slack_user_ids
     }
   }
 }

@@ -57,6 +57,12 @@ variable "slack_signing_secret" {
   sensitive = true
 }
 
+variable "allowed_slack_user_ids" {
+  type        = string
+  description = "Comma-separated Slack user IDs allowed for user_change/reaction tracking. Empty = allow all."
+  default     = ""
+}
+
 variable "events_handler_path" {
   type        = string
   description = "Path to built events handler JS file"

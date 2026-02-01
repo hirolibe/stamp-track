@@ -7,6 +7,12 @@ import { SlackEventEnvelope, SlackReplyMessage } from "./messages";
 
 const replyQueueUrl = process.env.SLACK_REPLY_QUEUE_URL || "";
 const aggregationQueueUrl = process.env.AGGREGATION_QUEUE_URL || "";
+const allowedSlackUserIds = new Set(
+  (process.env.ALLOWED_SLACK_USER_IDS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+);
 
 const sqsClient = new SQSClient({});
 
@@ -15,6 +21,12 @@ const hashPayload = (payload: string) =>
 
 const isOutStatus = (emoji: string | undefined) =>
   emoji === ":kyukei_chu:" || emoji === ":taikin_zumi:";
+
+const isUserAllowed = (slackUserId: string | undefined) => {
+  if (!slackUserId) return false;
+  if (allowedSlackUserIds.size === 0) return true;
+  return allowedSlackUserIds.has(slackUserId);
+};
 
 const sendReply = async (message: SlackReplyMessage) => {
   if (!replyQueueUrl) return;
@@ -42,6 +54,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
   const channelId = event?.item?.channel;
   const threadTs = event?.item?.ts;
   if (!slackUserId || !channelId || !threadTs) return;
+  if (!isUserAllowed(slackUserId)) return;
 
   const user = await ensureUser(prisma, slackUserId);
   const actor = `<@${slackUserId}>`;
@@ -164,6 +177,7 @@ const handleUserChange = async (prisma: ReturnType<typeof getPrisma>, event: any
   const user = event?.user;
   const slackUserId = user?.id;
   if (!slackUserId) return;
+  if (!isUserAllowed(slackUserId)) return;
 
   const statusEmoji = user?.profile?.status_emoji;
   const isOut = isOutStatus(statusEmoji);
