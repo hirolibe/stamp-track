@@ -24,7 +24,7 @@ const isOutStatus = (emoji: string | undefined) =>
 
 const isUserAllowed = (slackUserId: string | undefined) => {
   if (!slackUserId) return false;
-  if (allowedSlackUserIds.size === 0) return true;
+  if (allowedSlackUserIds.size === 0) return false;
   return allowedSlackUserIds.has(slackUserId);
 };
 

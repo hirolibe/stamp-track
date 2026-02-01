@@ -63,6 +63,10 @@ export const handler = async (event: APIGatewayProxyEventV2) => {
     return textResponse(200, "ok");
   }
 
+  if (eventType !== "reaction_added" && eventType !== "user_change") {
+    return textResponse(200, "ok");
+  }
+
   if (!eventsQueueUrl) {
     return textResponse(500, "events queue not configured");
   }

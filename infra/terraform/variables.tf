@@ -59,7 +59,7 @@ variable "slack_signing_secret" {
 
 variable "allowed_slack_user_ids" {
   type        = string
-  description = "Comma-separated Slack user IDs allowed for user_change/reaction tracking. Empty = allow all."
+  description = "Comma-separated Slack user IDs allowed for user_change/reaction tracking. Empty = deny all."
   default     = ""
 }
 
