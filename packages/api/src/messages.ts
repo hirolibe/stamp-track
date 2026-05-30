@@ -26,6 +26,7 @@ export type SlackReplyMessage =
       trigger: string;
       gross_seconds: number;
       other_seconds: number;
+      break_seconds: number;
       channels: {
         channel_id: string;
         seconds: number;
@@ -47,6 +48,11 @@ export type SlackReplyMessage =
       channel_id: string;
       message_ts: string;
       emoji: string;
+    }
+  | {
+      kind: "dm_text";
+      slack_user_id: string;
+      text: string;
     };
 
 export type SlackEventEnvelope = {

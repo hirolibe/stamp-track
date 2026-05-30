@@ -319,6 +319,12 @@ data "archive_file" "slack_notifier" {
   output_path = "${path.module}/dist/slack-notifier.zip"
 }
 
+data "archive_file" "migration_runner" {
+  type        = "zip"
+  source_dir  = var.migration_runner_path
+  output_path = "${path.module}/dist/migration-runner.zip"
+}
+
 resource "aws_lambda_function" "events" {
   function_name = "${local.name}-events"
   role          = aws_iam_role.lambda.arn
@@ -395,6 +401,27 @@ resource "aws_lambda_function" "slack_notifier" {
     variables = {
       APP_SECRETS_ARN   = aws_secretsmanager_secret.app.arn
       EVENTS_QUEUE_URL  = aws_sqs_queue.events.id
+    }
+  }
+}
+
+resource "aws_lambda_function" "migration_runner" {
+  function_name = "${local.name}-migration-runner"
+  role          = aws_iam_role.lambda.arn
+  handler       = "migration-runner.handler"
+  runtime       = "nodejs20.x"
+  filename      = data.archive_file.migration_runner.output_path
+  source_code_hash = data.archive_file.migration_runner.output_base64sha256
+  timeout       = 60
+
+  vpc_config {
+    subnet_ids         = [aws_subnet.private_a.id, aws_subnet.private_b.id]
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+
+  environment {
+    variables = {
+      APP_SECRETS_ARN = aws_secretsmanager_secret.app.arn
     }
   }
 }

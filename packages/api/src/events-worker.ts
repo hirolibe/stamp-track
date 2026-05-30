@@ -19,8 +19,8 @@ const sqsClient = new SQSClient({});
 const hashPayload = (payload: string) =>
   crypto.createHash("sha256").update(payload, "utf8").digest("hex");
 
-const isOutStatus = (emoji: string | undefined) =>
-  emoji === ":kyukei_chu:" || emoji === ":taikin_zumi:";
+const isBreakStatus = (emoji: string | undefined) => emoji === ":kyukei_chu:";
+const isCheckoutStatus = (emoji: string | undefined) => emoji === ":taikin_zumi:";
 
 const isUserAllowed = (slackUserId: string | undefined) => {
   if (!slackUserId) return false;
@@ -193,7 +193,8 @@ const handleUserChange = async (prisma: ReturnType<typeof getPrisma>, event: any
   if (!isUserAllowed(slackUserId)) return;
 
   const statusEmoji = user?.profile?.status_emoji;
-  const isOut = isOutStatus(statusEmoji);
+  const isBreak = isBreakStatus(statusEmoji);
+  const isCheckout = isCheckoutStatus(statusEmoji);
 
   const dbUser = await ensureUser(prisma, slackUserId);
 
@@ -202,48 +203,105 @@ const handleUserChange = async (prisma: ReturnType<typeof getPrisma>, event: any
     orderBy: { clock_in_at: "desc" }
   });
 
-  if (!isOut) {
-    if (!openWork) {
-      await prisma.workSession.create({
-        data: { user_id: dbUser.id, clock_in_at: new Date() }
+  const openBreak = await prisma.breakSession.findFirst({
+    where: { user_id: dbUser.id, ended_at: null },
+    orderBy: { started_at: "desc" }
+  });
+
+  // Case 1: Changing TO break status (not from checkout)
+  if (isBreak) {
+    // If no open work session, ignore
+    if (!openWork) return;
+
+    // If already on break, ignore
+    if (openBreak) return;
+
+    // Start a new break session
+    await prisma.breakSession.create({
+      data: { user_id: dbUser.id, started_at: new Date() }
+    });
+
+    // End active tasks during break
+    const activeTasks = await prisma.taskSession.findMany({
+      where: { user_id: dbUser.id, ended_at: null }
+    });
+    if (activeTasks.length > 0) {
+      await prisma.taskSession.updateMany({
+        where: { user_id: dbUser.id, ended_at: null },
+        data: { ended_at: new Date() }
       });
     }
     return;
   }
 
-  if (!openWork) return;
+  // Case 2: Changing TO checkout status
+  if (isCheckout) {
+    if (!openWork) return;
 
-  const closedWork = await prisma.workSession.update({
-    where: { id: openWork.id },
-    data: { clock_out_at: new Date() }
-  });
+    // Close any open break session
+    if (openBreak) {
+      await prisma.breakSession.update({
+        where: { id: openBreak.id },
+        data: { ended_at: new Date() }
+      });
+    }
 
-  const activeTasks = await prisma.taskSession.findMany({
-    where: { user_id: dbUser.id, ended_at: null }
-  });
+    // Close work session
+    const closedWork = await prisma.workSession.update({
+      where: { id: openWork.id },
+      data: { clock_out_at: new Date() }
+    });
 
-  if (activeTasks.length > 0) {
-    await prisma.taskSession.updateMany({
-      where: { user_id: dbUser.id, ended_at: null },
+    // End active tasks
+    const activeTasks = await prisma.taskSession.findMany({
+      where: { user_id: dbUser.id, ended_at: null }
+    });
+    if (activeTasks.length > 0) {
+      await prisma.taskSession.updateMany({
+        where: { user_id: dbUser.id, ended_at: null },
+        data: { ended_at: new Date() }
+      });
+    }
+
+    // Trigger aggregation
+    if (aggregationQueueUrl) {
+      const messageBody = JSON.stringify({
+        user_id: dbUser.id,
+        slack_user_id: slackUserId,
+        period_start: closedWork.clock_in_at,
+        period_end: closedWork.clock_out_at,
+        trigger: "checkout"
+      });
+      await sqsClient.send(
+        new SendMessageCommand({
+          QueueUrl: aggregationQueueUrl,
+          MessageBody: messageBody
+        })
+      );
+    }
+    return;
+  }
+
+  // Case 3: Changing FROM break to working status (not checkout)
+  if (openBreak) {
+    await prisma.breakSession.update({
+      where: { id: openBreak.id },
       data: { ended_at: new Date() }
     });
   }
 
-  if (aggregationQueueUrl) {
-    const trigger = statusEmoji === ":kyukei_chu:" ? "break" : "checkout";
-    const messageBody = JSON.stringify({
-      user_id: dbUser.id,
-      slack_user_id: slackUserId,
-      period_start: closedWork.clock_in_at,
-      period_end: closedWork.clock_out_at,
-      trigger
+  // Case 4: Starting work (no open session)
+  if (!openWork) {
+    await prisma.workSession.create({
+      data: { user_id: dbUser.id, clock_in_at: new Date() }
     });
-    await sqsClient.send(
-      new SendMessageCommand({
-        QueueUrl: aggregationQueueUrl,
-        MessageBody: messageBody
-      })
-    );
+
+    // Send welcome DM
+    await sendReply({
+      kind: "dm_text",
+      slack_user_id: slackUserId,
+      text: "出勤しました！今日も一日がんばりましょう:hi:"
+    });
   }
 };
 

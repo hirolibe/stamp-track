@@ -92,6 +92,12 @@ const handleMessage = async (message: SlackReplyMessage) => {
     await postDm(channelId, message.blocks, message.text);
   }
 
+  if (message.kind === "dm_text") {
+    const channelId = await openDm(message.slack_user_id);
+    if (!channelId) return;
+    await postDm(channelId, [], message.text);
+  }
+
   if (message.kind === "aggregation_report") {
     const channelId = await openDm(message.slack_user_id);
     if (!channelId) return;
@@ -101,6 +107,13 @@ const handleMessage = async (message: SlackReplyMessage) => {
     const headerText = `${formatDateJst(periodStart)}の稼働時間`;
 
     const blocks: any[] = [
+      {
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: "退勤しました！今日も一日おつかれさまでした:hi:"
+        }
+      },
       {
         type: "header",
         text: {
@@ -139,6 +152,15 @@ const handleMessage = async (message: SlackReplyMessage) => {
         text: `その他：${formatDuration(message.other_seconds)}`
       }
     });
+    if (message.break_seconds > 0) {
+      blocks.push({
+        type: "section",
+        text: {
+          type: "mrkdwn",
+          text: `休憩：${formatDuration(message.break_seconds)}`
+        }
+      });
+    }
     blocks.push({
       type: "section",
       text: {

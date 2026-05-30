@@ -86,3 +86,9 @@ variable "slack_notifier_path" {
   description = "Path to built slack notifier directory"
   default     = "../../packages/api/dist/lambda/slack-notifier"
 }
+
+variable "migration_runner_path" {
+  type        = string
+  description = "Path to built migration runner directory"
+  default     = "../../packages/api/dist/lambda/migration-runner"
+}

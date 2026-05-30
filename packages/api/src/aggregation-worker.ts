@@ -51,6 +51,21 @@ const computeTaskDurations = (
   });
 };
 
+const computeBreakDurations = (
+  breaks: { started_at: Date; ended_at: Date | null }[],
+  periodStart: Date,
+  periodEnd: Date
+) => {
+  return breaks.reduce((total, brk) => {
+    const start = brk.started_at;
+    const end = brk.ended_at ? brk.ended_at : periodEnd;
+    const clipStart = start > periodStart ? start : periodStart;
+    const clipEnd = end < periodEnd ? end : periodEnd;
+    const seconds = Math.max(0, (clipEnd.getTime() - clipStart.getTime()) / 1000);
+    return total + seconds;
+  }, 0);
+};
+
 const handleRecord = async (record: SQSRecord) => {
   const prisma = getPrisma();
   const payload = JSON.parse(record.body);
@@ -68,11 +83,20 @@ const handleRecord = async (record: SQSRecord) => {
     }
   });
 
+  const breaks = await prisma.breakSession.findMany({
+    where: {
+      user_id: userId,
+      started_at: { lt: periodEnd },
+      OR: [{ ended_at: null }, { ended_at: { gt: periodStart } }]
+    }
+  });
+
   const clipped = computeTaskDurations(tasks, periodStart, periodEnd);
   const durationsByChannel = groupDurations(clipped);
   const grossSeconds = Math.max(0, (periodEnd.getTime() - periodStart.getTime()) / 1000);
   const taskSeconds = Array.from(durationsByChannel.values()).reduce((a, b) => a + b, 0);
-  const otherSeconds = Math.max(0, grossSeconds - taskSeconds);
+  const breakSeconds = computeBreakDurations(breaks, periodStart, periodEnd);
+  const otherSeconds = Math.max(0, grossSeconds - taskSeconds - breakSeconds);
   const channelMap = new Map<string, { seconds: number; tasks: typeof tasks }>();
   for (const [channelId, seconds] of durationsByChannel.entries()) {
     channelMap.set(channelId, { seconds, tasks: [] });
@@ -112,6 +136,7 @@ const handleRecord = async (record: SQSRecord) => {
     trigger,
     gross_seconds: grossSeconds,
     other_seconds: otherSeconds,
+    break_seconds: breakSeconds,
     channels
   };
 

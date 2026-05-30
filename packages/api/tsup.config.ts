@@ -5,7 +5,8 @@ export default defineConfig({
     "events-handler": "src/events-handler.ts",
     "events-worker": "src/events-worker.ts",
     "aggregation-worker": "src/aggregation-worker.ts",
-    "slack-notifier": "src/slack-notifier.ts"
+    "slack-notifier": "src/slack-notifier.ts",
+    "migration-runner": "src/migration-runner.ts"
   },
   format: ["cjs"],
   bundle: true,
