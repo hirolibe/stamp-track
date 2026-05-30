@@ -27,14 +27,12 @@ export type SlackReplyMessage =
       gross_seconds: number;
       other_seconds: number;
       break_seconds: number;
-      channels: {
+      tasks: {
         channel_id: string;
+        thread_ts: string;
         seconds: number;
-        tasks: {
-          thread_ts: string;
-          started_at: string;
-          ended_at: string | null;
-        }[];
+        started_at: string;
+        ended_at: string | null;
       }[];
     }
   | {

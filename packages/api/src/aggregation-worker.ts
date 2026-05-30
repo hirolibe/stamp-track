@@ -18,13 +18,6 @@ const formatDuration = (seconds: number) => {
 const parseDate = (value: string | Date) =>
   value instanceof Date ? value : new Date(value);
 
-const groupDurations = (rows: { channel_id: string; seconds: number }[]) => {
-  const map = new Map<string, number>();
-  for (const row of rows) {
-    map.set(row.channel_id, (map.get(row.channel_id) || 0) + row.seconds);
-  }
-  return map;
-};
 
 const sendReply = async (message: SlackReplyMessage) => {
   if (!replyQueueUrl) return;
@@ -92,41 +85,24 @@ const handleRecord = async (record: SQSRecord) => {
   });
 
   const clipped = computeTaskDurations(tasks, periodStart, periodEnd);
-  const durationsByChannel = groupDurations(clipped);
   const grossSeconds = Math.max(0, (periodEnd.getTime() - periodStart.getTime()) / 1000);
-  const taskSeconds = Array.from(durationsByChannel.values()).reduce((a, b) => a + b, 0);
+  const taskSeconds = clipped.reduce((a, b) => a + b.seconds, 0);
   const breakSeconds = computeBreakDurations(breaks, periodStart, periodEnd);
   const otherSeconds = Math.max(0, grossSeconds - taskSeconds - breakSeconds);
-  const channelMap = new Map<string, { seconds: number; tasks: typeof tasks }>();
-  for (const [channelId, seconds] of durationsByChannel.entries()) {
-    channelMap.set(channelId, { seconds, tasks: [] });
-  }
 
-  tasks.forEach((task) => {
-    const end = task.ended_at ? task.ended_at : periodEnd;
-    const clipStart = task.started_at > periodStart ? task.started_at : periodStart;
-    const clipEnd = end < periodEnd ? end : periodEnd;
-    const seconds = Math.max(0, (clipEnd.getTime() - clipStart.getTime()) / 1000);
-    if (seconds <= 0) return;
-    const entry = channelMap.get(task.channel_id);
-    if (entry) {
-      entry.tasks.push(task);
-    }
-  });
-
-  const channels = Array.from(channelMap.entries())
-    .map(([channel_id, data]) => ({
-      channel_id,
-      seconds: data.seconds,
-      tasks: data.tasks
-        .sort((a, b) => a.started_at.getTime() - b.started_at.getTime())
-        .map((task) => ({
-          thread_ts: task.thread_ts,
-          started_at: task.started_at.toISOString(),
-          ended_at: task.ended_at ? task.ended_at.toISOString() : null
-        }))
-    }))
-    .sort((a, b) => b.seconds - a.seconds);
+  const flatTasks = clipped
+    .map((c, i) => {
+      const task = tasks[i];
+      return {
+        channel_id: task.channel_id,
+        thread_ts: task.thread_ts,
+        seconds: c.seconds,
+        started_at: task.started_at.toISOString(),
+        ended_at: task.ended_at ? task.ended_at.toISOString() : null
+      };
+    })
+    .filter((t) => t.seconds > 0)
+    .sort((a, b) => a.started_at.localeCompare(b.started_at));
 
   const message: SlackReplyMessage = {
     kind: "aggregation_report",
@@ -137,7 +113,7 @@ const handleRecord = async (record: SQSRecord) => {
     gross_seconds: grossSeconds,
     other_seconds: otherSeconds,
     break_seconds: breakSeconds,
-    channels
+    tasks: flatTasks
   };
 
   await sendReply(message);

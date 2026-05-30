@@ -1,7 +1,7 @@
 import { SQSEvent } from "aws-lambda";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { ensureSecrets } from "./secrets";
-import { getPermalink, postThreadReply, sendDmLink, openDm, postDm, getSlackClient, addReaction } from "./slack";
+import { postThreadReply, sendDmLink, openDm, postDm, getSlackClient, addReaction } from "./slack";
 import { SlackReplyMessage } from "./messages";
 
 const sqsClient = new SQSClient({});
@@ -29,16 +29,20 @@ const sanitizeText = (text: string) =>
 const truncateText = (text: string, max = 80) =>
   text.length > max ? `${text.slice(0, max)}…` : text;
 
-const fetchThreadTitle = async (channelId: string, threadTs: string) => {
+const extractTaskTitle = (raw: string): string => {
+  const bracketMatch = raw.match(/[【\[](.+?)[】\]]/);
+  if (bracketMatch) return bracketMatch[1].trim();
+  return truncateText(sanitizeText(raw.split("\n")[0]));
+};
+
+const fetchThreadRawText = async (channelId: string, threadTs: string): Promise<string> => {
   const res = await getSlackClient().conversations.replies({
     channel: channelId,
     ts: threadTs,
     limit: 1
   });
   const message = res.messages?.[0];
-  if (!message) return "（メッセージなし）";
-  const raw = message.text || "（メッセージなし）";
-  return truncateText(sanitizeText(raw));
+  return message?.text || "（メッセージなし）";
 };
 
 const handleMessage = async (message: SlackReplyMessage) => {
@@ -48,26 +52,7 @@ const handleMessage = async (message: SlackReplyMessage) => {
   }
 
   if (message.kind === "dm_link") {
-    const permalink = await getPermalink(message.channel_id, message.thread_ts);
-    console.log("dm_link: permalink=", permalink, "task_session_id=", message.task_session_id);
-    if (permalink) {
-      const result = await sendDmLink(message.slack_user_id, permalink);
-      console.log("dm_link: sendDmLink result=", result);
-      if (result && result.dm_message_ts && eventsQueueUrl) {
-        await sqsClient.send(
-          new SendMessageCommand({
-            QueueUrl: eventsQueueUrl,
-            MessageBody: JSON.stringify({
-              kind: "update_dm_info",
-              task_session_id: message.task_session_id,
-              dm_channel_id: result.dm_channel_id,
-              dm_message_ts: result.dm_message_ts
-            })
-          })
-        );
-        console.log("dm_link: sent update_dm_info to events queue");
-      }
-    }
+    // dm_link は現在未使用
     return;
   }
 
@@ -99,12 +84,32 @@ const handleMessage = async (message: SlackReplyMessage) => {
   }
 
   if (message.kind === "aggregation_report") {
-    const channelId = await openDm(message.slack_user_id);
-    if (!channelId) return;
+    const dmChannelId = await openDm(message.slack_user_id);
+    if (!dmChannelId) return;
 
     const periodStart = new Date(message.period_start);
-    const periodEnd = new Date(message.period_end);
     const headerText = `${formatDateJst(periodStart)}の稼働時間`;
+
+    // 各タスクのメッセージテキストを取得して案件名を抽出
+    const projectMap = new Map<string, { seconds: number; tasks: { title: string; seconds: number }[] }>();
+
+    for (const task of message.tasks) {
+      const raw = await fetchThreadRawText(task.channel_id, task.thread_ts);
+      const match = raw.match(/案件名[：:]\s*(.+)/m);
+      const projectName = match ? match[1].trim() : "未分類";
+      const title = extractTaskTitle(raw);
+
+      if (!projectMap.has(projectName)) {
+        projectMap.set(projectName, { seconds: 0, tasks: [] });
+      }
+      const entry = projectMap.get(projectName)!;
+      entry.seconds += task.seconds;
+      entry.tasks.push({ title, seconds: task.seconds });
+    }
+
+    const projects = Array.from(projectMap.entries())
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.seconds - a.seconds);
 
     const blocks: any[] = [
       {
@@ -123,17 +128,11 @@ const handleMessage = async (message: SlackReplyMessage) => {
       }
     ];
 
-    for (const channel of message.channels) {
+    for (const project of projects) {
       const lines: string[] = [];
-      lines.push(`<#${channel.channel_id}>：${formatDuration(channel.seconds)}`);
-      for (const task of channel.tasks) {
-        const permalink = await getPermalink(channel.channel_id, task.thread_ts);
-        const title = await fetchThreadTitle(channel.channel_id, task.thread_ts);
-        if (permalink) {
-          lines.push(`• <${permalink}|${title}>`);
-        } else {
-          lines.push(`• ${title}`);
-        }
+      lines.push(`*${project.name}*：${formatDuration(project.seconds)}`);
+      for (const task of project.tasks) {
+        lines.push(`• ${task.title}：${formatDuration(task.seconds)}`);
       }
       blocks.push({
         type: "section",
@@ -169,7 +168,7 @@ const handleMessage = async (message: SlackReplyMessage) => {
       }
     });
 
-    await postDm(channelId, blocks, "集計結果");
+    await postDm(dmChannelId, blocks, "集計結果");
   }
 };
 

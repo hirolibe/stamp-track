@@ -117,7 +117,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       });
     }
 
-    const taskSession = await prisma.taskSession.create({
+    await prisma.taskSession.create({
       data: {
         user_id: user.id,
         channel_id: channelId,
@@ -131,14 +131,6 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       channel_id: channelId,
       thread_ts: threadTs,
       text: `${actor} タスクの実行を開始しました！:hi:`
-    });
-
-    await sendReply({
-      kind: "dm_link",
-      slack_user_id: slackUserId,
-      channel_id: channelId,
-      thread_ts: threadTs,
-      task_session_id: taskSession.id
     });
   }
 
@@ -294,13 +286,6 @@ const handleUserChange = async (prisma: ReturnType<typeof getPrisma>, event: any
   if (!openWork) {
     await prisma.workSession.create({
       data: { user_id: dbUser.id, clock_in_at: new Date() }
-    });
-
-    // Send welcome DM
-    await sendReply({
-      kind: "dm_text",
-      slack_user_id: slackUserId,
-      text: "出勤しました！今日も一日がんばりましょう:hi:"
     });
   }
 };
