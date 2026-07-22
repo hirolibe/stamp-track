@@ -5,6 +5,7 @@ packages/api/.tsup
 .env
 terraform.tfstate
 terraform.tfstate.backup
+infra/terraform/tfplan*
 terraform.tfvars
 terraform.tfvars.sample
 infra/terraform/.terraform
