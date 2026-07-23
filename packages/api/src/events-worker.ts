@@ -266,6 +266,16 @@ const handleUserChange = async (prisma: ReturnType<typeof getPrisma>, event: any
         where: { user_id: dbUser.id, ended_at: null },
         data: { ended_at: new Date() }
       });
+      await Promise.all(
+        activeTasks.map((task) =>
+          sendReply({
+            kind: "thread_reply",
+            channel_id: task.channel_id,
+            thread_ts: task.thread_ts,
+            text: `休憩に入ったため、実行中のタスクを終了しました。再開するには:task_start:を押し直してください！🙇`
+          })
+        )
+      );
     }
     return;
   }
