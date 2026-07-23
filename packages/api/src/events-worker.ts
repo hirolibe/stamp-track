@@ -71,7 +71,7 @@ const ensureUser = async (prisma: ReturnType<typeof getPrisma>, slackUserId: str
 
 const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: any) => {
   const reaction = event?.reaction;
-  if (reaction !== "task_start" && reaction !== "task_end") return;
+  if (reaction !== "task_start" && reaction !== "task_end" && reaction !== "kyukei_chu") return;
 
   const slackUserId = event?.user;
   const channelId = event?.item?.channel;
@@ -230,9 +230,42 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
         kind: "thread_reply",
         channel_id: channelId,
         thread_ts: threadTs,
-        text: `まだタスクの実行が開始されていません！`
+        text: `まだタスクが開始されていません！`
       });
     }
+  }
+
+  if (reaction === "kyukei_chu") {
+    const active = await prisma.taskSession.findFirst({
+      where: {
+        user_id: user.id,
+        channel_id: channelId,
+        thread_ts: threadTs,
+        ended_at: null
+      }
+    });
+
+    if (!active) {
+      await sendReply({
+        kind: "thread_reply",
+        channel_id: channelId,
+        thread_ts: threadTs,
+        text: `まだタスクが開始されていません！`
+      });
+      return;
+    }
+
+    await prisma.taskSession.update({
+      where: { id: active.id },
+      data: { ended_at: new Date() }
+    });
+
+    await sendReply({
+      kind: "thread_reply",
+      channel_id: channelId,
+      thread_ts: threadTs,
+      text: `タスクを一時中断しました！タスクを再開するには:task_start:を押し直してください！:bow:`
+    });
   }
 };
 
