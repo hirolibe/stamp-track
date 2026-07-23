@@ -15,12 +15,12 @@ const formatDuration = (seconds: number) => {
   return `${hours}時間${minutes}分`;
 };
 
-const formatDateJst = (date: Date) =>
+const formatDateShortJst = (date: Date) =>
   date.toLocaleDateString("ja-JP", {
     timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "long",
-    day: "numeric"
+    month: "numeric",
+    day: "numeric",
+    weekday: "short"
   });
 
 const sanitizeText = (text: string) =>
@@ -35,14 +35,33 @@ const extractTaskTitle = (raw: string): string => {
   return truncateText(sanitizeText(raw.split("\n")[0]));
 };
 
-const fetchThreadRawText = async (channelId: string, threadTs: string): Promise<string> => {
+const extractProjectName = (raw: string): string => {
+  const match = raw.match(/案件名[：:]\s*(.+)/m);
+  return match ? match[1].trim() : "その他";
+};
+
+type ThreadInfo = { text: string; completed: boolean };
+
+const fetchThreadInfo = async (
+  cache: Map<string, ThreadInfo>,
+  channelId: string,
+  threadTs: string
+): Promise<ThreadInfo> => {
+  const key = `${channelId}:${threadTs}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
   const res = await getSlackClient().conversations.replies({
     channel: channelId,
     ts: threadTs,
     limit: 1
   });
   const message = res.messages?.[0];
-  return message?.text || "（メッセージなし）";
+  const text = message?.text || "（メッセージなし）";
+  const completed = (message?.reactions || []).some((r: any) => r.name === "task_end");
+  const info: ThreadInfo = { text, completed };
+  cache.set(key, info);
+  return info;
 };
 
 const handleMessage = async (message: SlackReplyMessage) => {
@@ -88,16 +107,17 @@ const handleMessage = async (message: SlackReplyMessage) => {
     if (!dmChannelId) return;
 
     const periodStart = new Date(message.period_start);
-    const headerText = `${formatDateJst(periodStart)}の稼働時間`;
+    const dateLabel = formatDateShortJst(periodStart);
+    const threadInfoCache = new Map<string, ThreadInfo>();
 
-    // 各タスクのメッセージテキストを取得して案件名を抽出
+    // 案件別の稼働時間（セッション単位で合算）と、チェックリスト用のユニークスレッド一覧を集計
     const projectMap = new Map<string, { seconds: number; tasks: { title: string; seconds: number }[] }>();
+    const threadEntries = new Map<string, { projectName: string; title: string; completed: boolean; startedAt: string }>();
 
     for (const task of message.tasks) {
-      const raw = await fetchThreadRawText(task.channel_id, task.thread_ts);
-      const match = raw.match(/案件名[：:]\s*(.+)/m);
-      const projectName = match ? match[1].trim() : "未分類";
-      const title = extractTaskTitle(raw);
+      const info = await fetchThreadInfo(threadInfoCache, task.channel_id, task.thread_ts);
+      const projectName = extractProjectName(info.text);
+      const title = extractTaskTitle(info.text);
 
       if (!projectMap.has(projectName)) {
         projectMap.set(projectName, { seconds: 0, tasks: [] });
@@ -105,36 +125,53 @@ const handleMessage = async (message: SlackReplyMessage) => {
       const entry = projectMap.get(projectName)!;
       entry.seconds += task.seconds;
       entry.tasks.push({ title, seconds: task.seconds });
+
+      const threadKey = `${task.channel_id}:${task.thread_ts}`;
+      const existing = threadEntries.get(threadKey);
+      if (!existing || task.started_at < existing.startedAt) {
+        threadEntries.set(threadKey, {
+          projectName,
+          title,
+          completed: info.completed,
+          startedAt: task.started_at
+        });
+      }
     }
 
     const projects = Array.from(projectMap.entries())
       .map(([name, data]) => ({ name, ...data }))
       .sort((a, b) => b.seconds - a.seconds);
 
-    const blocks: any[] = [
-      {
-        type: "section",
-        text: {
-          type: "mrkdwn",
-          text: "退勤しました！今日も一日おつかれさまでした:hi:"
-        }
-      },
+    // 夕方の振り返り: ユニークスレッドを稼働時間側と同じ案件順にグルーピング
+    const reflectionByProject = new Map<string, { title: string; completed: boolean; startedAt: string }[]>();
+    for (const entry of threadEntries.values()) {
+      if (!reflectionByProject.has(entry.projectName)) {
+        reflectionByProject.set(entry.projectName, []);
+      }
+      reflectionByProject.get(entry.projectName)!.push(entry);
+    }
+    for (const tasks of reflectionByProject.values()) {
+      tasks.sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+    }
+
+    const reflectionBlocks: any[] = [
       {
         type: "header",
         text: {
           type: "plain_text",
-          text: headerText
+          text: `【${dateLabel} 夕方の振り返り】`
         }
       }
     ];
 
     for (const project of projects) {
-      const lines: string[] = [];
-      lines.push(`*${project.name}*：${formatDuration(project.seconds)}`);
-      for (const task of project.tasks) {
-        lines.push(`• ${task.title}：${formatDuration(task.seconds)}`);
+      const tasks = reflectionByProject.get(project.name);
+      if (!tasks || tasks.length === 0) continue;
+      const lines = [`◯ ${project.name}`];
+      for (const task of tasks) {
+        lines.push(`[${task.completed ? "✓" : "　"}] ${task.title}`);
       }
-      blocks.push({
+      reflectionBlocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
@@ -143,32 +180,48 @@ const handleMessage = async (message: SlackReplyMessage) => {
       });
     }
 
-    blocks.push({ type: "divider" });
-    blocks.push({
-      type: "section",
-      text: {
-        type: "mrkdwn",
-        text: `その他：${formatDuration(message.other_seconds)}`
+    await postDm(dmChannelId, reflectionBlocks, "夕方の振り返り");
+
+    const durationBlocks: any[] = [
+      {
+        type: "header",
+        text: {
+          type: "plain_text",
+          text: `【${dateLabel} 稼働時間】`
+        }
       }
-    });
-    if (message.break_seconds > 0) {
-      blocks.push({
+    ];
+
+    for (const project of projects) {
+      const lines = [`◯${project.name}：${formatDuration(project.seconds)}`];
+      for (const task of project.tasks) {
+        lines.push(`- ${task.title}：${formatDuration(task.seconds)}`);
+      }
+      durationBlocks.push({
         type: "section",
         text: {
           type: "mrkdwn",
-          text: `休憩：${formatDuration(message.break_seconds)}`
+          text: lines.join("\n")
         }
       });
     }
-    blocks.push({
+
+    durationBlocks.push({ type: "divider" });
+    const summaryLines = [`その他：${formatDuration(message.other_seconds)}`];
+    if (message.break_seconds > 0) {
+      summaryLines.push(`休憩：${formatDuration(message.break_seconds)}`);
+    }
+    summaryLines.push(`合計：${formatDuration(message.gross_seconds)}`);
+    durationBlocks.push({
       type: "section",
       text: {
         type: "mrkdwn",
-        text: `合計：${formatDuration(message.gross_seconds)}`
+        text: summaryLines.join("\n")
       }
     });
+    durationBlocks.push({ type: "divider" });
 
-    await postDm(dmChannelId, blocks, "集計結果");
+    await postDm(dmChannelId, durationBlocks, "稼働時間");
   }
 };
 
