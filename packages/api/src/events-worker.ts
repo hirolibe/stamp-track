@@ -3,6 +3,7 @@ import { SQSEvent } from "aws-lambda";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { getPrisma } from "./db";
 import { ensureSecrets } from "./secrets";
+import { getMessageText } from "./slack";
 import { SlackEventEnvelope, SlackReplyMessage } from "./messages";
 
 const replyQueueUrl = process.env.SLACK_REPLY_QUEUE_URL || "";
@@ -21,6 +22,28 @@ const hashPayload = (payload: string) =>
 
 const isBreakStatus = (emoji: string | undefined) => emoji === ":kyukei_chu:";
 const isCheckoutStatus = (emoji: string | undefined) => emoji === ":taikin_zumi:";
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+const SCHEDULE_PATTERN = /スケジュール\s*[:：]\s*(\d{1,2}):(\d{2})\s*[〜~\-～ー]\s*(\d{1,2}):(\d{2})/;
+
+const buildJstDate = (base: Date, hour: number, minute: number) => {
+  const jst = new Date(base.getTime() + JST_OFFSET_MS);
+  const utcMs = Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate(), hour, minute) - JST_OFFSET_MS;
+  return new Date(utcMs);
+};
+
+const parseScheduleRange = (text: string, base: Date) => {
+  const match = text.match(SCHEDULE_PATTERN);
+  if (!match) return null;
+
+  const [, startHour, startMinute, endHour, endMinute] = match;
+  const start = buildJstDate(base, Number(startHour), Number(startMinute));
+  const end = buildJstDate(base, Number(endHour), Number(endMinute));
+  if (end <= start) return null;
+
+  return { start, end };
+};
 
 const isUserAllowed = (slackUserId: string | undefined) => {
   if (!slackUserId) return false;
@@ -57,7 +80,6 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
   if (!isUserAllowed(slackUserId)) return;
 
   const user = await ensureUser(prisma, slackUserId);
-  const actor = `<@${slackUserId}>`;
 
   if (reaction === "task_start") {
     const openWork = await prisma.workSession.findFirst({
@@ -69,7 +91,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
         kind: "thread_reply",
         channel_id: channelId,
         thread_ts: threadTs,
-        text: `${actor} 現在は勤務時間外です。出勤後に:task_start:を押してください。`
+        text: `現在は勤務時間外です。出勤後に:task_start:を押してください。`
       });
       return;
     }
@@ -88,7 +110,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
         kind: "thread_reply",
         channel_id: channelId,
         thread_ts: threadTs,
-        text: `${actor} すでにタスクの実行が開始されています！`
+        text: `すでにタスクの実行が開始されています！`
       });
       return;
     }
@@ -113,7 +135,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
         kind: "thread_reply",
         channel_id: otherActive.channel_id,
         thread_ts: otherActive.thread_ts,
-        text: `${actor} 他のタスクを実行中です！再開するには:task_start:を押し直してください！🙇`
+        text: `他のタスクを実行中です！再開するには:task_start:を押し直してください！🙇`
       });
     }
 
@@ -130,7 +152,7 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       kind: "thread_reply",
       channel_id: channelId,
       thread_ts: threadTs,
-      text: `${actor} タスクの実行を開始しました！:hi:`
+      text: `タスクの実行を開始しました！:hi:`
     });
   }
 
@@ -144,17 +166,22 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       }
     });
 
+    const messageText = channelId.startsWith("D") ? "" : await getMessageText(channelId, threadTs);
+    const schedule = parseScheduleRange(messageText, new Date());
+
     if (active) {
       console.log("task_end: active=", JSON.stringify(active));
       await prisma.taskSession.update({
         where: { id: active.id },
-        data: { ended_at: new Date() }
+        data: schedule
+          ? { started_at: schedule.start, ended_at: schedule.end }
+          : { ended_at: new Date() }
       });
       await sendReply({
         kind: "thread_reply",
         channel_id: channelId,
         thread_ts: threadTs,
-        text: `${actor} タスクが完了しました！🎉`
+        text: `タスクが完了しました！🎉`
       });
       if (active.dm_channel_id && active.dm_message_ts) {
         console.log("task_end: sending add_reaction to queue");
@@ -167,12 +194,29 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       } else {
         console.log("task_end: no dm_channel_id or dm_message_ts", active.dm_channel_id, active.dm_message_ts);
       }
+    } else if (schedule) {
+      console.log("task_end: no active session, creating from schedule", schedule);
+      await prisma.taskSession.create({
+        data: {
+          user_id: user.id,
+          channel_id: channelId,
+          thread_ts: threadTs,
+          started_at: schedule.start,
+          ended_at: schedule.end
+        }
+      });
+      await sendReply({
+        kind: "thread_reply",
+        channel_id: channelId,
+        thread_ts: threadTs,
+        text: `タスクが完了しました！🎉`
+      });
     } else {
       await sendReply({
         kind: "thread_reply",
         channel_id: channelId,
         thread_ts: threadTs,
-        text: `${actor} まだタスクの実行が開始されていません！`
+        text: `まだタスクの実行が開始されていません！`
       });
     }
   }
