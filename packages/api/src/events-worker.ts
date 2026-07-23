@@ -96,6 +96,20 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       return;
     }
 
+    const openBreak = await prisma.breakSession.findFirst({
+      where: { user_id: user.id, ended_at: null }
+    });
+
+    if (openBreak) {
+      await sendReply({
+        kind: "thread_reply",
+        channel_id: channelId,
+        thread_ts: threadTs,
+        text: `ステータスが休憩中のままです！休憩を終了してから再度:task_start:を押してください！🙇`
+      });
+      return;
+    }
+
     const sameThreadActive = await prisma.taskSession.findFirst({
       where: {
         user_id: user.id,
