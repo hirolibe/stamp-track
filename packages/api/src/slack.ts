@@ -41,15 +41,6 @@ export const getPermalink = async (channel: string, messageTs: string) => {
 
 export const getSlackClient = () => getClient();
 
-export const getMessageText = async (channel: string, ts: string): Promise<string> => {
-  const res = await getClient().conversations.replies({
-    channel,
-    ts,
-    limit: 1
-  });
-  return res.messages?.[0]?.text || "";
-};
-
 export const openDm = async (slackUserId: string) => {
   const dm = await getClient().conversations.open({ users: slackUserId });
   return dm.channel?.id || "";

@@ -3,7 +3,6 @@ import { SQSEvent } from "aws-lambda";
 import { SQSClient, SendMessageCommand } from "@aws-sdk/client-sqs";
 import { getPrisma } from "./db";
 import { ensureSecrets } from "./secrets";
-import { getMessageText } from "./slack";
 import { SlackEventEnvelope, SlackReplyMessage } from "./messages";
 
 const replyQueueUrl = process.env.SLACK_REPLY_QUEUE_URL || "";
@@ -22,28 +21,6 @@ const hashPayload = (payload: string) =>
 
 const isBreakStatus = (emoji: string | undefined) => emoji === ":kyukei_chu:";
 const isCheckoutStatus = (emoji: string | undefined) => emoji === ":taikin_zumi:";
-
-const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-const SCHEDULE_PATTERN = /スケジュール\s*[:：]\s*(\d{1,2}):(\d{2})\s*[〜~\-～ー]\s*(\d{1,2}):(\d{2})/;
-
-const buildJstDate = (base: Date, hour: number, minute: number) => {
-  const jst = new Date(base.getTime() + JST_OFFSET_MS);
-  const utcMs = Date.UTC(jst.getUTCFullYear(), jst.getUTCMonth(), jst.getUTCDate(), hour, minute) - JST_OFFSET_MS;
-  return new Date(utcMs);
-};
-
-const parseScheduleRange = (text: string, base: Date) => {
-  const match = text.match(SCHEDULE_PATTERN);
-  if (!match) return null;
-
-  const [, startHour, startMinute, endHour, endMinute] = match;
-  const start = buildJstDate(base, Number(startHour), Number(startMinute));
-  const end = buildJstDate(base, Number(endHour), Number(endMinute));
-  if (end <= start) return null;
-
-  return { start, end };
-};
 
 const isUserAllowed = (slackUserId: string | undefined) => {
   if (!slackUserId) return false;
@@ -180,16 +157,11 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       }
     });
 
-    const messageText = channelId.startsWith("D") ? "" : await getMessageText(channelId, threadTs);
-    const schedule = parseScheduleRange(messageText, new Date());
-
     if (active) {
       console.log("task_end: active=", JSON.stringify(active));
       await prisma.taskSession.update({
         where: { id: active.id },
-        data: schedule
-          ? { started_at: schedule.start, ended_at: schedule.end }
-          : { ended_at: new Date() }
+        data: { ended_at: new Date() }
       });
       await sendReply({
         kind: "thread_reply",
@@ -208,23 +180,6 @@ const handleReactionAdded = async (prisma: ReturnType<typeof getPrisma>, event: 
       } else {
         console.log("task_end: no dm_channel_id or dm_message_ts", active.dm_channel_id, active.dm_message_ts);
       }
-    } else if (schedule) {
-      console.log("task_end: no active session, creating from schedule", schedule);
-      await prisma.taskSession.create({
-        data: {
-          user_id: user.id,
-          channel_id: channelId,
-          thread_ts: threadTs,
-          started_at: schedule.start,
-          ended_at: schedule.end
-        }
-      });
-      await sendReply({
-        kind: "thread_reply",
-        channel_id: channelId,
-        thread_ts: threadTs,
-        text: `タスクが完了しました！🎉`
-      });
     } else {
       await sendReply({
         kind: "thread_reply",
